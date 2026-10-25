@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"html"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -93,34 +94,31 @@ func newReverseProxy(redirects, backends map[string]string) *reverseProxy {
 }
 
 func (rp *reverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Redirect.
-	if ok := redirectByHost(rp.redirects, w, r); ok {
-		return
-	}
-
 	// Proxy.
-	host := r.Host
-	if _, ok := rp.backends[host]; ok {
+	if _, ok := rp.backends[r.Host]; ok {
 		respW := &responseWriter{ResponseWriter: w}
 		rp.proxy.ServeHTTP(respW, r)
 
 		urlStr := fmt.Sprintf("%s%s?%s", r.Host, r.URL.EscapedPath(), r.URL.RawQuery)
 		if respW.status != 200 {
-			log.Printf("%s %s %d", r.Method, urlStr, respW.status)
+			log.Printf("%s %s %s %d", r.RemoteAddr, r.Method, urlStr, respW.status)
 		}
 		return
 	}
 
-	// Unknown host.
-	w.Write([]byte(fmt.Sprintf("unknown host: %s", host)))
+	// Redirect.
+	if ok := redirectByHost(rp.redirects, w, r); ok {
+		return
+	}
 }
 
 func serveTLS(certMng *autocert.Manager, redirects, backends map[string]string) error {
 	handler := newReverseProxy(redirects, backends)
 	withGz := gziphandler.GzipHandler(handler)
 	server := &http.Server{
-		Addr:    ":443",
-		Handler: withGz,
+		Addr:     ":443",
+		Handler:  withGz,
+		ErrorLog: log.New(io.Discard, "", 0),
 	}
 	return server.Serve(certMng.Listener())
 }
@@ -133,8 +131,9 @@ func serveToTLS() error {
 		http.Redirect(w, r, urlStr, http.StatusFound)
 	}
 	server := &http.Server{
-		Addr:    ":80",
-		Handler: http.HandlerFunc(handler),
+		Addr:     ":80",
+		Handler:  http.HandlerFunc(handler),
+		ErrorLog: log.New(io.Discard, "", 0),
 	}
 	return server.ListenAndServe()
 }
